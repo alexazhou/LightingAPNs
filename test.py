@@ -5,7 +5,7 @@
 # @Link    : 
 # @Disc    : 
 
-import apns
+import LightingAPNs as apns
 import logging
 import codecs
 import json

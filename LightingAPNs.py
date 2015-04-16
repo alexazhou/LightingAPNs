@@ -29,8 +29,6 @@ APNS_ERRORS = {
 class connecting_pool():
     def __init__(self, cert_path, mode, max_connection ):
 
-        print("APNS_MODE_SANDBOX",APNS_MODE_SANDBOX)
-
         if not os.path.exists(cert_path):
             logging.error("Invalid certificate path: %s" % cert_path)
             raise Exception("Invalid certificate path")
@@ -40,7 +38,7 @@ class connecting_pool():
         else:
             self.host = 'gateway.push.apple.com'
 
-        print("self.host = ",self.host)
+        logging.debug("APNs domin: %s"%self.host)
 
         self.cert_path = cert_path
         self.max_connection = max_connection
@@ -99,7 +97,7 @@ def push_core(sock, device_tokens, pay_load):
         items = [1, int(ident), int(expiry), 32, token, len(payload_bytes), payload_bytes]
         pkt = struct.pack('!BIIH32sH%ds'%len(pay_load), *items)
         
-        print("push to device:->",codecs.encode(pkt,'hex_codec'))
+        logging.debug("push to device:%s"%device_tokens[ident - 1])
 
         try:
             sock.write( pkt )
@@ -112,17 +110,14 @@ def push_core(sock, device_tokens, pay_load):
         #time.sleep(3)
 
     # If there was an error sending, we will get a response on socket
-    logging.debug("start select")
     rs,ws,es=select.select([sock],[],[],3)
-    print("finish select",rs)
 
     if sock in rs:
         logging.error("There was a error")
         response = sock.read(6)
-        print("APNS response:",response)
         command, status, failed_ident = struct.unpack('!BBI',response[:6])
         sendIdx= failed_ident
-        logging.info("APNS Error: %s @ident:%s\n", APNS_ERRORS.get(status), failed_ident)
+        logging.error("APNS Error: %s @ident:%s\n", APNS_ERRORS.get(status), failed_ident)
 
     sock.close()
 
