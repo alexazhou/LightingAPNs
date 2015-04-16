@@ -1,6 +1,6 @@
 #LightingAPNs
 
-###LightingAPNs是一个让Python和Apple Push Notification Service可以进行通讯的模块
+###Apple Push Notification Service推送服务模块
 
 有以下优势:
 
