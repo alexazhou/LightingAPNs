@@ -18,16 +18,17 @@ def main():
 
     token = "******cacfd12b4a0a1609fcf16345a61f765763c67e052f374bc28afbcff8f4"
 
+
     pay_load =  json.dumps({
             'aps': {
                 'alert': 'Push Test %d: %s' % (1, str(uuid.uuid4())[:8])
             }
         })
 
-    deviceTockens = [token]
-    ret = apns.push( deviceTockens, pay_load )
+    device_tokens = [token]
+    failed_tokens = apns.push( device_tokens, pay_load )
 
-    logging.info("Pushed to %d device at all"%ret)
+    logging.info("Pushed finished whith %d/%d failed"%(len(failed_tokens), len(device_tokens)))
 
 
 if __name__ == '__main__':

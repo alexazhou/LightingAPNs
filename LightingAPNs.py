@@ -29,7 +29,9 @@ APNS_ERRORS = {
     6:'invalid topic size',
     7:'invalid payload size',
     8:'invalid token',
-    255:'Unknown'
+    255:'Unknown',
+
+    256:'SSL connection disconnected'
 }
 
 class connecting_pool():
@@ -88,62 +90,85 @@ class connecting_pool():
         self.used_con_pool.remove(con)
         self.unused_con_pool.append(con)
 
-
-#向指定的设备列表推送消息
-#返回成功推送的数量
+'''
+push pay_load to many devices
+sock: TLS sock to APNs
+device_tokens: token string in list
+pay_load: json string
+return: pushed number, error
+'''
 def push_core(sock, device_tokens, pay_load):
 
     sendIdx = 0
-    for ident in range( 1, len(device_tokens)+1 ):
+    for ident in range(  len(device_tokens) ):
         expiry = time.time() + 36000
-        token = codecs.decode( device_tokens[ident - 1] ,'hex_codec')
+        token_str = device_tokens[ident]
+        token = codecs.decode( token_str ,'hex_codec')
         
         payload_bytes = pay_load.encode("utf-8")
 
         items = [1, int(ident), int(expiry), 32, token, len(payload_bytes), payload_bytes]
         pkt = struct.pack('!BIIH32sH%ds'%len(pay_load), *items)
         
-        logging.debug("push to device:%s"%device_tokens[ident - 1])
+        logging.debug("push to device:%s"%token_str)
 
         try:
             sock.write( pkt )
             sendIdx = ident
-            logging.debug("write socket ok")
         except socket.error as e:
-            logging.error("Socket write error: %s", e)
+            logging.error("Socket write error: %s on token %s"%(e,token_str))
             break
 
         #time.sleep(3)
 
     # If there was an error sending, we will get a response on socket
     rs,ws,es=select.select([sock],[],[],3)
-
+    error = 0
     if sock in rs:
         logging.error("There was a error")
         response = sock.read(6)
-        command, status, failed_ident = struct.unpack('!BBI',response[:6])
-        sendIdx= failed_ident
-        logging.error("APNS Error: %s @ident:%s\n", APNS_ERRORS.get(status), failed_ident)
+        if len(response) == 0:
+            logging.error("TLS Socket disconnected!!!")
+            failed_ident = 256
+        else:
+            command, error, failed_ident = struct.unpack('!BBI',response[:6])
+            sendIdx= failed_ident - 1
+            logging.error("APNS Error: %s @ident:%s\n", APNS_ERRORS.get(error), failed_ident)
 
-    sock.close()
-
-    return sendIdx
+    return sendIdx + 1,error
 
 
 '''
-deviceTokens: token string list
-payload: json string
+device_tokens: token string list
+pay_load: json string
+return: failed token list
 '''
 def push( device_tokens, pay_load):
     global pool 
 
-    sock = pool.get_a_connection()
-
+    failed_tokens = []
+    
     logging.info("start push to %d device"%len(device_tokens))
-    push_numbers = push_core(sock, device_tokens, pay_load)
-    logging.info("push_numbers:%d"%push_numbers)
+    while len(device_tokens) != 0:
+    
+        sock = pool.get_a_connection()
+        push_numbers,error = push_core(sock, device_tokens, pay_load)
 
-    return push_numbers
+        if error == 0:
+            device_tokens = []
+        else:
+            if error == 8:#invalid token
+                failed_tokens.append( device_tokens[push_numbers] )
+                device_tokens = device_tokens[ push_numbers+1 :]
+            else:
+                failed_tokens.append( device_tokens[push_numbers:] )
+                device_tokens = []
+
+        sock.close()
+            
+    logging.info("pushed to %d device at all"%push_numbers)
+    
+    return failed_tokens
 
 def config(cert_path, mode = APNS_MODE_SANDBOX ,max_connection = 5):
     global pool
