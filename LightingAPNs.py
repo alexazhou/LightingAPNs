@@ -51,7 +51,6 @@ class connecting_pool():
         self.cert_path = cert_path
         self.max_connection = max_connection
         self.unused_con_pool = []#未被使用的TLS连接
-        self.used_con_pool = []#已经在使用中的连接
     
     def create_connections(self, num ):
 
@@ -63,7 +62,9 @@ class connecting_pool():
                     socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                     certfile=self.cert_path
                 )
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 30)#keep sock alive
+                
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)#keep sock alive
+
                 sock.connect((self.host, 2195))
                 logging.info("TLS connect success")
 
@@ -73,23 +74,33 @@ class connecting_pool():
 
             self.unused_con_pool.append(sock)
 
+    def check_a_connection(self, sock):
+
+        rs,ws,es=select.select([sock],[],[],0)
+        #print("rs:%s,ws:%s,es:%s"%(rs,ws,es))
+        if sock in rs:
+            return False
+        else:
+            return True
+
     def get_a_connection(self):
-        
-        if( len(self.unused_con_pool) == 0 ):
-            self.create_connections(1)
+                
+        while len(self.unused_con_pool) > 0:
+            con = self.unused_con_pool.pop()
+            if self.check_a_connection(con):
+                return con
 
-        con = self.unused_con_pool.pop()
-        self.used_con_pool.append( con )
+        self.create_connections(1)
 
-        return con
+        return self.unused_con_pool.pop() 
 
     def release_a_connection(self, con):
         
-        if con not in self.used_con_pool:
-            raise Exception("")
-
-        self.used_con_pool.remove(con)
-        self.unused_con_pool.append(con)
+        if self.check_a_connection( con ):
+            self.unused_con_pool.append( con )
+        else:
+            logging.debug("The connect to release is broken, so drop it")
+        
 
 '''
 push pay_load to many devices
@@ -166,7 +177,7 @@ def push( device_tokens, pay_load ):
                 failed_tokens.append( device_tokens[push_numbers:] )
                 device_tokens = []
 
-        sock.close()
+        pool.release_a_connection(sock)
             
     logging.info("pushed to %d device at all"%push_numbers)
     
