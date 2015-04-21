@@ -63,6 +63,7 @@ class connecting_pool():
                     socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                     certfile=self.cert_path
                 )
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 30)#keep sock alive
                 sock.connect((self.host, 2195))
                 logging.info("TLS connect success")
 
@@ -143,16 +144,17 @@ device_tokens: token string list
 pay_load: json string
 return: failed token list
 '''
-def push( device_tokens, pay_load):
+def push( device_tokens, pay_load ):
     global pool 
 
     failed_tokens = []
-    
+    push_numbers = 0
+
     logging.info("start push to %d device"%len(device_tokens))
     while len(device_tokens) != 0:
     
         sock = pool.get_a_connection()
-        push_numbers,error = push_core(sock, device_tokens, pay_load)
+        push_numbers,error = push_core(sock, device_tokens, pay_load )
 
         if error == 0:
             device_tokens = []
@@ -173,7 +175,7 @@ def push( device_tokens, pay_load):
 def config(cert_path, mode = APNS_MODE_SANDBOX ,max_connection = 5):
     global pool
 
-    pool = connecting_pool( cert_path, APNS_MODE_SANDBOX, max_connection )
+    pool = connecting_pool( cert_path, mode, max_connection )
 
 
 
