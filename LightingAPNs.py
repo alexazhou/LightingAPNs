@@ -34,6 +34,15 @@ APNS_ERRORS = {
     256:'SSL connection disconnected'
 }
 
+
+class ConnectToAPNsError(Exception):
+
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
+
 class connecting_pool():
     def __init__(self, cert_path, mode, max_connection ):
 
@@ -64,13 +73,14 @@ class connecting_pool():
                 )
                 
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)#keep sock alive
+                sock.settimeout( 15 )
 
                 sock.connect((self.host, 2195))
                 logging.info("TLS connect success")
 
             except Exception as e:
                 logging.error("Failed to connect: %s" % e)
-                raise Exception("connect to apns server failed:%s"%e)
+                raise ConnectToAPNsError("connect to apns server failed:%s"%e)
 
             self.unused_con_pool.append(sock)
 
@@ -138,50 +148,66 @@ def push_core(sock, device_tokens, pay_load):
     error = 0
     if sock in rs:
         logging.error("There was a error")
-        response = sock.read(6)
-        if len(response) == 0:
+        
+        try:
+            response = sock.read(6)
+        except:#after connection disconnect, the read method may raise a "ConnectionResetError: [Errno 54] Connection reset by peer" Exception
+            response = b""
+        
+        if len(response) != 6:
             logging.error("TLS Socket disconnected!!!")
-            failed_ident = 256
+            error = 256
         else:
             command, error, failed_ident = struct.unpack('!BBI',response[:6])
             sendIdx= failed_ident - 1
-            logging.error("APNS Error: %s @ident:%s\n", APNS_ERRORS.get(error), failed_ident)
+            logging.error("APNS Error: %s @Ident:%s Token:%s\n"%(APNS_ERRORS.get(error), failed_ident, device_tokens[failed_ident]))
 
-    return sendIdx + 1,error
+    return { "send_number":sendIdx + 1, "error":error }
 
 
 '''
 device_tokens: token string list
 pay_load: json string
+progress_callback: callback with the amount of token has been send
 return: failed token list
 '''
 def push( device_tokens, pay_load ):
     global pool 
 
     failed_tokens = []
-    push_numbers = 0
+    invalid_tokens = []
+    processed_amount = 0
+    error = 0
 
     logging.info("start push to %d device"%len(device_tokens))
-    while len(device_tokens) != 0:
+    while processed_amount < len(device_tokens):
     
-        sock = pool.get_a_connection()
-        push_numbers,error = push_core(sock, device_tokens, pay_load )
+        try:
+            sock = pool.get_a_connection() #this method may raise a exception
 
-        if error == 0:
-            device_tokens = []
-        else:
+            ret_info = push_core(sock, device_tokens[processed_amount:], pay_load )
+            processed_amount += ret_info["send_number"]
+            error = ret_info["error"]
+
+            pool.release_a_connection(sock)
+
+        except ConnectToAPNsError:
+            error = 256
+            logging.error("Connect to APNs failed")
+
+        if error != 0:
+
             if error == 8:#invalid token
-                failed_tokens.append( device_tokens[push_numbers] )
-                device_tokens = device_tokens[ push_numbers+1 :]
+                failed_tokens.append( device_tokens[processed_amount] )
+                invalid_tokens.append( device_tokens[processed_amount] )
+                processed_amount += 1
             else:
-                failed_tokens.append( device_tokens[push_numbers:] )
-                device_tokens = []
+                failed_tokens = failed_tokens + device_tokens[processed_amount:]
+                processed_amount += len( device_tokens[processed_amount:] )
 
-        pool.release_a_connection(sock)
-            
-    logging.info("pushed to %d device at all"%push_numbers)
+    logging.info("LightingAPNS: pushed to %d device at all"%(len(device_tokens) - len(failed_tokens)))
     
-    return failed_tokens
+    return {"failed_tokens":failed_tokens,"invalid_tokens":invalid_tokens,"error":error}
 
 def config(cert_path, mode = APNS_MODE_SANDBOX ,max_connection = 5):
     global pool
