@@ -34,6 +34,15 @@ APNS_ERRORS = {
     256:'SSL connection disconnected'
 }
 
+group_id = 0
+
+def get_group_id():
+    global group_id
+    group_id += 1
+    if group_id > 0xff:
+        group_id = 0
+
+    return group_id
 
 class ConnectToAPNsError(Exception):
 
@@ -121,7 +130,8 @@ return: pushed number, error
 '''
 def push_core(sock, device_tokens, pay_load):
 
-    sendIdx = 0
+    baseIdx = get_group_id()<<24
+    sendAmount = 0
     for ident in range(  len(device_tokens) ):
         expiry = time.time() + 36000
         token_str = device_tokens[ident]
@@ -129,14 +139,14 @@ def push_core(sock, device_tokens, pay_load):
         
         payload_bytes = pay_load.encode("utf-8")
 
-        items = [1, int(ident), int(expiry), 32, token, len(payload_bytes), payload_bytes]
+        items = [1, baseIdx + ident, int(expiry), 32, token, len(payload_bytes), payload_bytes]
         pkt = struct.pack('!BIIH32sH%ds'%len(pay_load), *items)
         
         logging.debug("push to device:%s"%token_str)
 
         try:
             sock.write( pkt )
-            sendIdx = ident
+            sendAmount = ident + 1
         except socket.error as e:
             logging.error("Socket write error: %s on token %s"%(e,token_str))
             break
@@ -154,15 +164,27 @@ def push_core(sock, device_tokens, pay_load):
         except:#after connection disconnect, the read method may raise a "ConnectionResetError: [Errno 54] Connection reset by peer" Exception
             response = b""
         
+        logging.error("TLS Socket disconnected!!!")
+
         if len(response) != 6:
-            logging.error("TLS Socket disconnected!!!")
             error = 256
         else:
             command, error, failed_ident = struct.unpack('!BBI',response[:6])
-            sendIdx= failed_ident - 1
-            logging.error("APNS Error: %s @Ident:%s Token:%s\n"%(APNS_ERRORS.get(error), failed_ident, device_tokens[failed_ident]))
+            logging.error("APNS Error: %s @Ident:%s\n"%(APNS_ERRORS.get(error), hex(failed_ident)))
 
-    return { "send_number":sendIdx + 1, "error":error }
+            if failed_ident>>24 != baseIdx>>24:#Is a overdue error report
+                sendAmount = 0
+                logging.error("Is a overdue error report")
+            else:
+
+                if (failed_ident - baseIdx ) + 1 > sendAmount :
+                    logging.error("Got a Invalid ident\n")
+                else:
+                    sendAmount= failed_ident - baseIdx
+                    logging.error("Invalid Token:%s\n"%device_tokens[failed_ident - baseIdx])
+
+
+    return { "send_number":sendAmount , "error":error }
 
 
 '''
